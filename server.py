@@ -1,25 +1,25 @@
 from base64 import b64encode
-from termcolor import colored
 import hashlib
 import logging
 import socket
+from termcolor import colored
 from socketserver import TCPServer, StreamRequestHandler
-import threading
 
-LOG_NAME = "server"
+from log import create_logger
+
+HOST, PORT = "localhost", 9999
 
 class WebSocketServer(TCPServer):
     allow_reuse_address = True
     def __init__(self, address : tuple[str, int], handler : "WebSocketHandler"):
         super().__init__(address, handler)
 
-
 class WebSocketHandler(StreamRequestHandler):
     def __init__(self, request : socket.socket, client_address : tuple[str, int], server : WebSocketServer):
         super().__init__(request, client_address, server)
     
     def setup(self):
-        self.log = logging.getLogger(LOG_NAME)
+        self.log = logging.getLogger("ws_server")
         super().setup()
         self.keep_alive = True
         self.handshake_done = False
@@ -30,12 +30,16 @@ class WebSocketHandler(StreamRequestHandler):
             if not self.handshake_done:
                 self.handshake()
             elif self.valid_client:
-                # self.read_next_message()
+                self.read_next_message()
                 self.server.shutdown()
-            
-    def read_bytes(self, num):
-        return self.rfile.read(num)
     
+    def read_next_message(self):
+        thing = self.read_bytes(2)
+        self.log.debug(thing)
+
+    def read_bytes(self, no_bytes : int):
+        return self.rfile.read(2)
+
     def read_http_headers(self):
         headers = {}
         http_get = self.rfile.readline().decode().strip()
@@ -53,22 +57,18 @@ class WebSocketHandler(StreamRequestHandler):
 
         return headers
 
-    def generate_handshake_response(self, websocket_key : str) -> str:
+    @staticmethod
+    def generate_handshake_response(websocket_key : str) -> str:
         server_handshake = \
             "HTTP/1.1 101 Switching Protocols\r\n"\
             "Upgrade: websocket\r\n"\
             "Connection: Upgrade\r\n"\
-            f"Sec-WebSocket-Accept: {self.generate_response_key(websocket_key)}\r\n"\
+            f"Sec-WebSocket-Accept: {generate_response_key(websocket_key)}\r\n"\
             "Sec-WebSocket-Protocol: chat\r\n"\
             "\r\n"
 
         return server_handshake
     
-    def generate_response_key(self, websocket_key : str) -> str:
-        GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-        response_key = b64encode(hashlib.sha1(websocket_key.encode() + GUID.encode()).digest())
-        return response_key.decode()
-
     def handshake(self):
         self.log.info("Client connected. Starting handshake...")
         headers = self.read_http_headers()
@@ -88,39 +88,16 @@ class WebSocketHandler(StreamRequestHandler):
         response = self.generate_handshake_response(headers["sec-websocket-key"])
         self.log.debug(response)
         self.wfile.write(response.encode())
-        # self.handshake_done = True
-        # self.valid_client = True
+        self.handshake_done = True
+        self.valid_client = True
 
-
-def create_log():
-    class CustomFormatter(logging.Formatter):
-        """Logging Formatter to add colors and count warning / errors
-        from : https://stackoverflow.com/questions/1343227/can-pythons-logging-format-be-modified-depending-on-the-message-log-level
-        """
-        format_strings = {
-            logging.DEBUG: colored("[%(asctime)s.%(msecs)03d][%(levelname)s][%(filename)s:%(lineno)d] %(message)s", color='cyan',attrs=['bold']),
-            logging.INFO: colored("[%(asctime)s.%(msecs)03d][%(levelname)s][%(filename)s:%(lineno)d] %(message)s", color='white'),
-            logging.WARNING: colored("[%(asctime)s.%(msecs)03d][%(levelname)s][%(filename)s:%(lineno)d] %(message)s", color='yellow'),
-            logging.ERROR: colored("[%(asctime)s.%(msecs)03d][%(levelname)s][%(filename)s:%(lineno)d] %(message)s", color='red'),
-            logging.CRITICAL: colored("[%(asctime)s.%(msecs)03d][%(levelname)s][%(filename)s:%(lineno)d] %(message)s", color='white',on_color='on_red')
-        }
-        def format(self, record):
-            log_fmt = self.format_strings.get(record.levelno)
-            formatter = logging.Formatter(log_fmt,datefmt='%H:%M:%S')
-            return formatter.format(record)
-
-    log = logging.getLogger(LOG_NAME)
-    log.setLevel(logging.DEBUG)
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.DEBUG)
-    console_handler.setFormatter(CustomFormatter())
-    log.addHandler(console_handler)
-
-    return log
+def generate_response_key(websocket_key : str) -> str:
+    GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    response_key = b64encode(hashlib.sha1(websocket_key.encode() + GUID.encode()).digest())
+    return response_key.decode()
 
 if __name__ == "__main__":
-    create_log()
-    HOST, PORT = "localhost", 9999
+    create_logger("ws_server", logging.DEBUG)
     with WebSocketServer((HOST, PORT), WebSocketHandler) as server:
         try: 
             server.serve_forever()
